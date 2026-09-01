@@ -135,8 +135,8 @@ tbody tr.pending{background:rgba(201,162,75,0.12);}
       <h2>Log today's milk</h2>
       <div><label>Date</label><input type="date" id="f-date"></div>
       <div class="row2">
-        <div><label>Morning (ml)</label><input type="number" id="f-morning" placeholder="0" min="0" step="50"></div>
-        <div><label>Evening (ml)</label><input type="number" id="f-evening" placeholder="0" min="0" step="50"></div>
+        <div><label>Morning (ml)</label><select id="f-morning"></select></div>
+        <div><label>Evening (ml)</label><select id="f-evening"></select></div>
       </div>
       <label>Note (optional)</label>
       <input type="text" id="f-note" placeholder="e.g. extra for guests, skipped evening">
@@ -235,8 +235,8 @@ tbody tr.pending{background:rgba(201,162,75,0.12);}
     <div class="eyebrow">Defaults & pricing</div>
     <h2>Usual quantities and price</h2>
     <div class="row2">
-      <div><label>Default morning (ml)</label><input type="number" id="s-defmorning" min="0" step="50" value="500"></div>
-      <div><label>Default evening (ml)</label><input type="number" id="s-defevening" min="0" step="50" value="500"></div>
+      <div><label>Default morning (ml)</label><select id="s-defmorning"></select></div>
+      <div><label>Default evening (ml)</label><select id="s-defevening"></select></div>
     </div>
     <label>Price per liter (₹)</label>
     <input type="number" id="s-price" min="0" step="0.5" placeholder="e.g. 53">
@@ -305,6 +305,16 @@ function doGet(e) {
   const fmtRupee = n => '₹' + Math.round(n*100)/100;
   const fmtMl = n => Math.round(n).toLocaleString('en-IN') + ' ml';
 
+  const QTY_OPTIONS = [0, 250, 500, 750, 1000, 1250, 1500];
+  function renderQtyOptions(selectEl, selectedValue){
+    let opts = [...QTY_OPTIONS];
+    const sel = Number(selectedValue);
+    if(!isNaN(sel) && !opts.includes(sel)) opts.push(sel);
+    opts.sort((a,b)=>a-b);
+    selectEl.innerHTML = opts.map(v => `<option value="${v}">${v===0 ? '0 (skip)' : v+' ml'}</option>`).join('');
+    if(!isNaN(sel)) selectEl.value = sel;
+  }
+
   $('todayStamp').textContent = new Date().toLocaleDateString('en-IN', {weekday:'short', day:'numeric', month:'short', year:'numeric'});
   $('f-date').value = todayISO();
 
@@ -331,10 +341,10 @@ function doGet(e) {
         if(parsed.defaults) defaults = Object.assign(defaults, parsed.defaults);
       }
     }catch(err){ /* none yet */ }
-    $('f-morning').value = defaults.morning;
-    $('f-evening').value = defaults.evening;
-    $('s-defmorning').value = defaults.morning;
-    $('s-defevening').value = defaults.evening;
+    renderQtyOptions($('f-morning'), defaults.morning);
+    renderQtyOptions($('f-evening'), defaults.evening);
+    renderQtyOptions($('s-defmorning'), defaults.morning);
+    renderQtyOptions($('s-defevening'), defaults.evening);
     $('s-price').value = defaults.price || '';
   }
 
@@ -359,8 +369,8 @@ function doGet(e) {
     defaults.evening = parseFloat($('s-defevening').value) || 0;
     defaults.price = parseFloat($('s-price').value) || 0;
     await saveLocalState();
-    $('f-morning').value = defaults.morning;
-    $('f-evening').value = defaults.evening;
+    renderQtyOptions($('f-morning'), defaults.morning);
+    renderQtyOptions($('f-evening'), defaults.evening);
     $('defaultsSaveStatus').textContent = 'Saved ✓';
     setTimeout(()=> $('defaultsSaveStatus').textContent = '', 2000);
     renderAll();
@@ -463,8 +473,8 @@ function doGet(e) {
       renderAll();
     }
     $('f-note').value='';
-    $('f-morning').value = defaults.morning;
-    $('f-evening').value = defaults.evening;
+    renderQtyOptions($('f-morning'), defaults.morning);
+    renderQtyOptions($('f-evening'), defaults.evening);
     setTimeout(()=> $('addStatus').textContent='', 4000);
   });
 
