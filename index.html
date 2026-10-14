@@ -252,7 +252,7 @@ tbody tr.pending{background:rgba(201,162,75,0.12);}
     </div>
     <button class="btn btn-sync" id="addPriceBtn" style="margin-top:10px;">Add / update price</button>
     <span class="helptext" id="priceSaveStatus"></span>
-    <div class="helptext">Each month is billed at the latest price whose "effective from" month is on or before it. When milk price goes up, add the new price with its starting month — older months keep their old price. Saved locally in this browser only.</div>
+    <div class="helptext">Each month is billed at the latest price whose "effective from" month is on or before it. When milk price goes up, add the new price with its starting month — older months keep their old price. Prices are stored in a "Prices" tab of your Google Sheet, so any new device or browser picks them up automatically once the Sheet URL is set.</div>
     <div id="priceHistoryWrap" style="margin-top:12px;"></div>
   </div>
 
@@ -261,10 +261,25 @@ tbody tr.pending{background:rgba(201,162,75,0.12);}
     <h2>Google Apps Script backend (paste this in once)</h2>
     <p style="font-size:0.82rem;line-height:1.6;">1. Create a Google Sheet. 2. Extensions → Apps Script. 3. Paste the code below. 4. Deploy → New deployment → Web app → Execute as "Me" → Who has access "Anyone". 5. Copy the Web App URL into the field above.</p>
     <pre style="background:var(--ink);color:var(--paper);padding:14px;border-radius:6px;font-size:0.75rem;overflow-x:auto;">function doPost(e) {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Entries')
-    || SpreadsheetApp.getActiveSpreadsheet().insertSheet('Entries');
-  var rows = JSON.parse(e.postData.contents);
-  rows.forEach(function(r) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var body = JSON.parse(e.postData.contents);
+
+  if (body &amp;&amp; body.action === 'setPrices') {
+    var ps = ss.getSheetByName('Prices') || ss.insertSheet('Prices');
+    ps.clear();
+    ps.getRange('A:A').setNumberFormat('@');   // keep "2026-10" as text, not a date
+    ps.getRange(1, 1, 1, 2).setValues([['from', 'price']]);
+    var list = body.prices || [];
+    if (list.length) {
+      ps.getRange(2, 1, list.length, 2)
+        .setValues(list.map(function(p){ return [String(p.from), Number(p.price)]; }));
+    }
+    return ContentService.createTextOutput(JSON.stringify({status:'ok'}))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  var sheet = ss.getSheetByName('Entries') || ss.insertSheet('Entries');
+  body.forEach(function(r) {
     sheet.appendRow([r.date, r.morning, r.evening, r.note]);
   });
   return ContentService.createTextOutput(JSON.stringify({status:'ok'}))
@@ -273,27 +288,41 @@ tbody tr.pending{background:rgba(201,162,75,0.12);}
 
 function doGet(e) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName('Entries');
+  var tz = ss.getSpreadsheetTimeZone();
   var rows = [];
-  if (sheet) {
-    var data = sheet.getDataRange().getValues();
-    var tz = ss.getSpreadsheetTimeZone();
-    rows = data.map(function(r) {
-      var dateVal = r[0];
-      var dateStr = dateVal;
-      if (Object.prototype.toString.call(dateVal) === '[object Date]') {
-        dateStr = Utilities.formatDate(dateVal, tz, 'yyyy-MM-dd');
-      }
-      return { date: dateStr, morning: r[1], evening: r[2], note: r[3] };
-    }).filter(function(r){ return r.date; });
+
+  if (e.parameter.action === 'prices') {
+    var ps = ss.getSheetByName('Prices');
+    if (ps &amp;&amp; ps.getLastRow() > 1) {
+      rows = ps.getRange(2, 1, ps.getLastRow() - 1, 2).getValues().map(function(r) {
+        var f = r[0];
+        if (Object.prototype.toString.call(f) === '[object Date]') {
+          f = Utilities.formatDate(f, tz, 'yyyy-MM');
+        }
+        return { from: String(f).slice(0, 7), price: r[1] };
+      }).filter(function(r){ return r.from &amp;&amp; r.price; });
+    }
+  } else {
+    var sheet = ss.getSheetByName('Entries');
+    if (sheet) {
+      rows = sheet.getDataRange().getValues().map(function(r) {
+        var dateStr = r[0];
+        if (Object.prototype.toString.call(dateStr) === '[object Date]') {
+          dateStr = Utilities.formatDate(dateStr, tz, 'yyyy-MM-dd');
+        }
+        return { date: dateStr, morning: r[1], evening: r[2], note: r[3] };
+      }).filter(function(r){ return r.date; });
+    }
   }
+
   var json = JSON.stringify(rows);
   if (e.parameter.callback) {
     return ContentService.createTextOutput(e.parameter.callback + '(' + json + ')')
       .setMimeType(ContentService.MimeType.JAVASCRIPT);
   }
   return ContentService.createTextOutput(json).setMimeType(ContentService.MimeType.JSON);
-}</pre>
+}
+</pre>
     <div class="helptext">Note: reading data back uses JSONP (a script-tag fetch) rather than a normal request — this is because Google's Web App doesn't send the browser permission headers a regular fetch needs to read a response from a different site. JSONP works around that reliably; you don't need to do anything differently, it's handled automatically. The date is explicitly formatted using the Sheet's own timezone to avoid a day-shift bug that occurs when Sheets auto-converts a date string into a real Date cell.</div>
   </div>
 </div>
@@ -307,6 +336,7 @@ function doGet(e) {
   let pending = [];       // added locally, not yet confirmed synced
   let defaults = { morning: 500, evening: 500, price: 0 };
   let priceHistory = []; // [{from:'YYYY-MM', price:Number}]
+  let priceDirty = false; // true = local price list not yet confirmed saved to the Sheet
   let trendChart, sessionChart, billChart;
   let lastFetchTime = null;
   let refreshInProgress = false;
@@ -352,6 +382,7 @@ function doGet(e) {
         if(parsed.sheetUrl) $('sheetUrl').value = parsed.sheetUrl;
         if(parsed.defaults) defaults = Object.assign(defaults, parsed.defaults);
         if(Array.isArray(parsed.priceHistory)) priceHistory = parsed.priceHistory;
+        priceDirty = !!parsed.priceDirty;
       }
     }catch(err){ /* none yet */ }
     renderQtyOptions($('f-morning'), defaults.morning);
@@ -370,7 +401,7 @@ function doGet(e) {
     try{ localStorage.setItem('milkledger-pending', JSON.stringify(pending)); }catch(err){}
     try{
       localStorage.setItem('milkledger-settings', JSON.stringify({
-        sheetUrl: $('sheetUrl').value.trim(), defaults: defaults, priceHistory: priceHistory
+        sheetUrl: $('sheetUrl').value.trim(), defaults: defaults, priceHistory: priceHistory, priceDirty: priceDirty
       }));
     }catch(err){}
   }
@@ -410,6 +441,7 @@ function doGet(e) {
     wrap.querySelectorAll('[data-del]').forEach(b=> b.addEventListener('click', async ()=>{
       priceHistory = priceHistory.filter(p=>p.from !== b.dataset.del);
       await saveLocalState(); renderPriceHistory(); renderAll();
+      await pushPricesToSheet();
     }));
   }
 
@@ -422,9 +454,40 @@ function doGet(e) {
     await saveLocalState();
     $('s-price').value = '';
     renderPriceHistory(); renderAll();
-    $('priceSaveStatus').textContent = 'Saved ✓';
-    setTimeout(()=> $('priceSaveStatus').textContent = '', 2000);
+    $('priceSaveStatus').textContent = 'Saving to Sheet…';
+    const ok = await pushPricesToSheet();
+    $('priceSaveStatus').textContent = ok ? 'Saved to Sheet ✓' : ($('sheetUrl').value.trim() ? 'Saved here — will retry sending to Sheet on next refresh.' : 'Saved here only — connect a Sheet URL to make it permanent.');
+    setTimeout(()=> $('priceSaveStatus').textContent = '', 4000);
   });
+
+  async function pushPricesToSheet(){
+    const url = $('sheetUrl').value.trim();
+    if(!url) return false;
+    priceDirty = true; await saveLocalState();
+    try{
+      await fetch(url, { method:'POST', mode:'no-cors', headers:{'Content-Type':'text/plain'},
+        body: JSON.stringify({ action:'setPrices', prices: priceHistory }) });
+      priceDirty = false; await saveLocalState();
+      return true;
+    }catch(err){ return false; }
+  }
+
+  async function syncPricesWithSheet(url){
+    // Sheet is the source of truth; local list is only pushed up if it has unsaved changes or the Sheet has none yet.
+    let remote = [];
+    try{
+      const raw = await fetchFromSheetJSONP(url + (url.includes('?')?'&':'?') + 'action=prices');
+      remote = (Array.isArray(raw)?raw:[]).filter(r=> r && r.from && Number(r.price)>0)
+        .map(r=>({ from:String(r.from).slice(0,7), price:Number(r.price) }));
+    }catch(err){ return; }
+    if(priceDirty || (!remote.length && priceHistory.length)){
+      await pushPricesToSheet();
+    }else if(remote.length){
+      priceHistory = remote;
+      await saveLocalState();
+    }
+    renderPriceHistory();
+  }
 
   function fetchFromSheetJSONP(url, timeoutMs=12000){
     return new Promise((resolve, reject)=>{
@@ -464,6 +527,7 @@ function doGet(e) {
         note: r.note||'', synced:true
       }));
       lastFetchTime = new Date();
+      await syncPricesWithSheet(url);
       setSourceStatus('ok', `Synced with Sheet · ${remoteEntries.length} rows · updated ${lastFetchTime.toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})}`);
     }catch(err){
       setSourceStatus('bad', 'Could not reach Sheet — showing last known + pending data.');
