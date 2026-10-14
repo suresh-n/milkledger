@@ -45,3 +45,9 @@ no server of your own to run.
 - If you ever change the Apps Script code, redeploy via **Deploy → Manage deployments → Edit (pencil icon) → New version → Deploy** — this keeps the same URL rather than generating a new one.
 - The Sheet URL, your default quantities, and price per liter are all stored only in each browser's local storage — you'll need to set them once per browser/device.
 - Price per liter isn't written to the Sheet — if it changes, just update it in Settings; past months already logged aren't affected retroactively.
+
+## Price history (Prices tab)
+
+Price per liter is stored in a **Prices** tab (columns `from`, `price`) that the script creates automatically the first time you add a price in Settings. Every device reads it from there, so a new machine only needs the Web App URL.
+
+If you update `Code.gs`, redeploy via **Deploy → Manage deployments → Edit (pencil) → New version → Deploy** so the same URL picks up the change.
